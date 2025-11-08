@@ -1,116 +1,211 @@
-import { Image, StyleSheet, Linking } from "react-native";
-import { Link } from "expo-router";
-
-import ParallaxScrollView from "@/components/ParallaxScrollView";
-import { ThemedText } from "@/components/ThemedText";
-import { ThemedView } from "@/components/ThemedView";
+import React, { useEffect, useState } from 'react';
+import { View, ScrollView, StyleSheet, RefreshControl, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { ThemedText } from '@/components/ThemedText';
+import { ThemedView } from '@/components/ThemedView';
+import { useRepository } from '@/hooks/useRepository';
+import { TodoItem } from '@/components/todos/TodoItem';
+import { AddTodoButton } from '@/components/todos/AddTodoButton';
+import { SyncStatus } from '@/components/todos/SyncStatus';
+import { SyncButton } from '@/components/todos/SyncButton';
+import { NetworkStatusIndicator } from '@/components/todos/NetworkStatusIndicator';
+import { SyncToast } from '@/components/todos/SyncToast';
+import { ConflictList } from '@/components/todos/ConflictList';
+import { Todo } from '@/types';
 
 export default function HomeScreen() {
-  const handleVisitCodeGuide = () => {
-    Linking.openURL("https://codeguide.dev");
+  const {
+    initialized,
+    loading,
+    error,
+    getAllTodos,
+    createTodo,
+    updateTodo,
+    deleteTodo,
+    getSyncStats,
+    clearError
+  } = useRepository();
+
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [syncStats, setSyncStats] = useState({
+    total: 0,
+    synced: 0,
+    pending: 0,
+    conflicts: 0
+  });
+  const [refreshing, setRefreshing] = useState(false);
+
+  useEffect(() => {
+    if (initialized) {
+      loadData();
+    }
+  }, [initialized]);
+
+  useEffect(() => {
+    if (error) {
+      Alert.alert('Error', error, [{ text: 'OK', onPress: clearError }]);
+    }
+  }, [error, clearError]);
+
+  const loadData = async () => {
+    try {
+      const [todosData, statsData] = await Promise.all([
+        getAllTodos(),
+        getSyncStats()
+      ]);
+      setTodos(todosData);
+      setSyncStats(statsData);
+    } catch (err) {
+      console.error('Failed to load data:', err);
+    }
   };
 
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: "#ffffff", dark: "#1A1A1A" }}
-      headerImage={
-        <Image
-          source={require("@/assets/images/codeguide-logo.png")}
-          style={styles.logo}
-          resizeMode="contain"
-        />
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  };
+
+  const handleAddTodo = async (todoData: { title: string; description?: string; completed: boolean }) => {
+    try {
+      const newTodo = await createTodo(todoData);
+      setTodos(prev => [newTodo, ...prev]);
+      await updateSyncStats();
+    } catch (err) {
+      console.error('Failed to add todo:', err);
+    }
+  };
+
+  const handleUpdateTodo = async (id: string, updates: Partial<Pick<Todo, 'title' | 'description' | 'completed'>>) => {
+    try {
+      const updatedTodo = await updateTodo(id, updates);
+      if (updatedTodo) {
+        setTodos(prev => prev.map(todo => todo.id === id ? updatedTodo : todo));
+        await updateSyncStats();
       }
-    >
-      <ThemedView style={styles.container}>
-        <ThemedText type="title" style={styles.title}>
-          CodeGuide Starter Kit
-        </ThemedText>
+    } catch (err) {
+      console.error('Failed to update todo:', err);
+    }
+  };
 
-        <ThemedText style={styles.description}>
-          A modern cross-platform mobile application starter template built with
-          Expo and Firebase, featuring authentication and real-time database
-          integration.
-        </ThemedText>
+  const handleDeleteTodo = async (id: string) => {
+    try {
+      await deleteTodo(id);
+      setTodos(prev => prev.filter(todo => todo.id !== id));
+      await updateSyncStats();
+    } catch (err) {
+      console.error('Failed to delete todo:', err);
+    }
+  };
 
-        <ThemedView style={styles.ctaContainer}>
-          <ThemedView
-            style={styles.ctaButton}
-            onTouchEnd={handleVisitCodeGuide}
-          >
-            <ThemedText style={styles.ctaText}>Visit CodeGuide</ThemedText>
-          </ThemedView>
+  const updateSyncStats = async () => {
+    try {
+      const stats = await getSyncStats();
+      setSyncStats(stats);
+    } catch (err) {
+      console.error('Failed to update sync stats:', err);
+    }
+  };
+
+  if (!initialized) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <ThemedView style={styles.loadingContainer}>
+          <ThemedText>Loading...</ThemedText>
         </ThemedView>
+      </SafeAreaView>
+    );
+  }
 
-        <ThemedView style={styles.featuresContainer}>
-          <ThemedText type="subtitle" style={styles.featuresTitle}>
-            Key Features
-          </ThemedText>
-          <ThemedText style={styles.featureItem}>
-            • Firebase Authentication
-          </ThemedText>
-          <ThemedText style={styles.featureItem}>
-            • Real-time Database Integration
-          </ThemedText>
-          <ThemedText style={styles.featureItem}>
-            • Cross-platform Support
-          </ThemedText>
-          <ThemedText style={styles.featureItem}>
-            • Modern UI Components
-          </ThemedText>
-          <ThemedText style={styles.featureItem}>
-            • File-based Routing
-          </ThemedText>
-        </ThemedView>
+  return (
+    <SafeAreaView style={styles.container}>
+      <ThemedView style={styles.header}>
+        <ThemedText type="title">My Todos</ThemedText>
+        <ThemedText style={styles.subtitle}>
+          Offline-first with sync
+        </ThemedText>
       </ThemedView>
-    </ParallaxScrollView>
+
+      <ScrollView
+        style={styles.scrollView}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
+        }
+      >
+        <NetworkStatusIndicator />
+
+        <SyncStatus stats={syncStats} />
+
+        <SyncButton />
+
+        <ConflictList />
+
+        <View style={styles.todosContainer}>
+          {todos.length === 0 ? (
+            <ThemedView style={styles.emptyState}>
+              <ThemedText style={styles.emptyStateText}>
+                No todos yet. Create your first one!
+              </ThemedText>
+            </ThemedView>
+          ) : (
+            todos.map(todo => (
+              <TodoItem
+                key={todo.id}
+                todo={todo}
+                onUpdate={handleUpdateTodo}
+                onDelete={handleDeleteTodo}
+              />
+            ))
+          )}
+        </View>
+
+        <View style={styles.bottomPadding} />
+      </ScrollView>
+
+      <AddTodoButton onAdd={handleAddTodo} />
+
+      <SyncToast />
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  header: {
     padding: 20,
+    paddingBottom: 10,
+    alignItems: 'center',
   },
-  logo: {
-    height: 120,
-    width: "100%",
-    position: "absolute",
-    bottom: 20,
+  subtitle: {
+    fontSize: 14,
+    opacity: 0.7,
+    marginTop: 4,
   },
-  title: {
-    fontSize: 28,
-    textAlign: "center",
-    marginBottom: 16,
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  description: {
-    textAlign: "center",
-    marginBottom: 32,
-    lineHeight: 24,
+  scrollView: {
+    flex: 1,
   },
-  ctaContainer: {
-    alignItems: "center",
-    marginBottom: 40,
+  todosContainer: {
+    flex: 1,
   },
-  ctaButton: {
-    backgroundColor: "#007AFF",
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 12,
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
   },
-  ctaText: {
-    color: "#FFFFFF",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  featuresContainer: {
-    marginTop: 20,
-  },
-  featuresTitle: {
-    marginBottom: 16,
-  },
-  featureItem: {
-    marginBottom: 8,
+  emptyStateText: {
     fontSize: 16,
-    lineHeight: 24,
+    opacity: 0.7,
+    textAlign: 'center',
+  },
+  bottomPadding: {
+    height: 100,
   },
 });

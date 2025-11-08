@@ -19,3 +19,13 @@ export function useThemeColor(
     return Colors[theme][colorName];
   }
 }
+
+export function useExtendedThemeColor() {
+  const theme = useColorScheme() ?? 'light';
+
+  return {
+    border: theme === 'light' ? '#E5E7EB' : '#374151',
+    error: theme === 'light' ? '#EF4444' : '#DC2626',
+    tabBackground: theme === 'light' ? '#FFFFFF' : '#1F2937',
+  };
+}
